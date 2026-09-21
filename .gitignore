@@ -1,0 +1,11 @@
+# binaries
+/bin/
+*.exe
+# env & secrets
+.env
+*.local
+# go
+vendor/
+# editor
+.idea/
+.vscode/
