@@ -39,7 +39,7 @@ func Load() (Config, error) {
 		LLM: LLMConfig{
 			Provider: getEnv("LLM_PROVIDER", "ollama"),
 			BaseURL:  getEnv("LLM_BASE_URL", "http://localhost:11434"),
-			Model:    getEnv("LLM_MODEL", "qwen2.5:7b"),
+			Model:    getEnv("LLM_MODEL", "llama3.2:3b"),
 			Timeout:  getEnvDuration("LLM_TIMEOUT", 60*time.Second),
 		},
 	}

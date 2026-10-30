@@ -1,6 +1,6 @@
 # ---- config ----
 BIN_DIR := bin
-CMDS    := agent agentd mcp-k8s mcp-prom mcp-shell
+CMDS    := copilot
 GO      := go
 
 # ---- meta ----
