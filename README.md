@@ -52,7 +52,7 @@ docs/adr/           architecture decisions
 
 ## Run it
 
-Requires Go 1.24+ and [Ollama](https://ollama.com).
+Requires Go 1.25+ and [Ollama](https://ollama.com).
 
 ```sh
 ollama pull llama3.2:3b
