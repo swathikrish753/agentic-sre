@@ -1,6 +1,6 @@
 # ---- config ----
 BIN_DIR := bin
-CMDS    := copilot
+CMDS    := copilot mcp-k8s
 GO      := go
 
 # ---- meta ----

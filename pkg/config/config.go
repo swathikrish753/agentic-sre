@@ -13,6 +13,7 @@ import (
 type Config struct {
 	Log LogConfig
 	LLM LLMConfig
+	MCP MCPConfig
 }
 
 // LogConfig controls structured logging behaviour.
@@ -29,6 +30,11 @@ type LLMConfig struct {
 	Timeout  time.Duration // per-request timeout
 }
 
+// MCPConfig says where the agent's tool servers live.
+type MCPConfig struct {
+	K8sServer string // path to the mcp-k8s binary, started as a child process
+}
+
 // Load reads config from the environment, applies defaults, and validates.
 func Load() (Config, error) {
 	cfg := Config{
@@ -41,6 +47,9 @@ func Load() (Config, error) {
 			BaseURL:  getEnv("LLM_BASE_URL", "http://localhost:11434"),
 			Model:    getEnv("LLM_MODEL", "llama3.2:3b"),
 			Timeout:  getEnvDuration("LLM_TIMEOUT", 60*time.Second),
+		},
+		MCP: MCPConfig{
+			K8sServer: getEnv("MCP_K8S_SERVER", "bin/mcp-k8s"),
 		},
 	}
 	if err := cfg.validate(); err != nil {

@@ -5,14 +5,14 @@ failures (CrashLoopBackOff, ImagePullBackOff, OOMKilled, Pending), and proposes 
 that a human approves before they run. Every run is traced, and an eval harness
 measures how well it performs.
 
-> Status: in progress. Days 1-2 of 22 are done (LLM client + ReAct loop).
+> Status: in progress. Days 1-3 of 22 are done (LLM client, ReAct loop, MCP tools).
 
 ## How it works
 
 ```
 cmd/copilot ──▶ Agent.Run (ReAct loop) ──▶ llm.Client ──▶ Ollama (local) / cloud model
                      │
-                     ├──▶ Actor ──▶ FakeActor today → MCP tools → Kubernetes
+                     ├──▶ MCPActor ──stdio──▶ mcp-k8s (MCP server) ──▶ Kubernetes (Day 6)
                      └──▶ history []Message (the agent's working memory)
 ```
 
@@ -30,7 +30,7 @@ the model replies with `Final Answer: ...`.
 Two interfaces carry the design, so the loop never changes when either side is swapped:
 
 - **`llm.Client`**: Ollama, a cloud model, or a scripted fake in tests.
-- **`Actor`**: canned fake tools today, real MCP tools next.
+- **`Actor`**: real MCP tools via `MCPActor`, or canned `FakeActor` in loop tests.
 
 ### Safety built into the loop
 
@@ -42,9 +42,11 @@ Two interfaces carry the design, so the loop never changes when either side is s
 ## Layout
 
 ```
-cmd/copilot/        entrypoint: wires brain + hands + agent, runs one task
+cmd/copilot/        entrypoint: starts mcp-k8s, wires brain + hands + agent, runs one task
+cmd/mcp-k8s/        standalone MCP server over stdio (works with any MCP client)
+internal/tools/     MCP tool definitions: get_pods, get_logs (canned data until Day 6)
 internal/llm/       Client interface + OllamaClient (net/http, streaming via NDJSON)
-internal/agent/     ReAct loop, prompt, reply parser, Actor interface
+internal/agent/     ReAct loop, prompt, reply parser, Actor interface, MCPActor
 pkg/config/         env-driven config with defaults
 pkg/logger/         logrus setup (text or JSON)
 docs/adr/           architecture decisions
@@ -56,11 +58,16 @@ Requires Go 1.25+ and [Ollama](https://ollama.com).
 
 ```sh
 ollama pull llama3.2:3b
-go run ./cmd/copilot "The cart service is down. Find out why."
+make build
+./bin/copilot "The cart service is down. Find out why."
 ```
 
+The copilot starts `bin/mcp-k8s` as a child process and talks MCP to it over
+stdin/stdout. `mcp-k8s` also works on its own with any MCP client.
+
 Config comes from env vars: `LLM_BASE_URL` (default `http://localhost:11434`),
-`LLM_MODEL` (default `llama3.2:3b`), `LOG_LEVEL`, `LOG_FORMAT`.
+`LLM_MODEL` (default `llama3.2:3b`), `MCP_K8S_SERVER` (default `bin/mcp-k8s`),
+`LOG_LEVEL`, `LOG_FORMAT`.
 
 ## Test
 
@@ -68,14 +75,15 @@ Config comes from env vars: `LLM_BASE_URL` (default `http://localhost:11434`),
 make test   # go test -race ./...
 ```
 
-Tests need no Ollama: the LLM is replaced by a scripted fake, and the Ollama client is
-tested against an `httptest` server.
+Tests need no Ollama: the LLM is replaced by a scripted fake, the Ollama client is
+tested against an `httptest` server, and the MCP server is tested both in memory and
+as a real child process over stdio.
 
 ## Roadmap
 
 | Phase | Days | What |
 |---|---|---|
-| 0. Foundations | 1-4 | ✅ LLM client · ✅ ReAct loop · MCP tools · tracing & token accounting |
+| 0. Foundations | 1-4 | ✅ LLM client · ✅ ReAct loop · ✅ MCP tools · tracing & token accounting |
 | 1. Environment | 5-6 | minikube + slim ecommerce app · read-only cluster tools |
 | 2. Diagnosis | 7-12 | failure classes · structured report · eval harness (20 injected failures) |
 | 3. Remediation | 13-18 | write tools · guardrails (dry-run, approval, allowlist) · remediation evals |
