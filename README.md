@@ -5,7 +5,7 @@ failures (CrashLoopBackOff, ImagePullBackOff, OOMKilled, Pending), and proposes 
 that a human approves before they run. Every run is traced, and an eval harness
 measures how well it performs.
 
-> Status: in progress. Days 1-3 of 22 are done (LLM client, ReAct loop, MCP tools).
+> Status: in progress. Days 1-4 of 22 are done (LLM client, ReAct loop, MCP tools, tracing).
 
 ## How it works
 
@@ -32,6 +32,18 @@ Two interfaces carry the design, so the loop never changes when either side is s
 - **`llm.Client`**: Ollama, a cloud model, or a scripted fake in tests.
 - **`Actor`**: real MCP tools via `MCPActor`, or canned `FakeActor` in loop tests.
 
+### Every run is traced
+
+Each run writes `traces/<run-id>.jsonl`: one line per step (action, observation, prompt and
+completion tokens, LLM and tool latency, ₹ cost), then one summary line (outcome, steps,
+total tokens, total time, total cost). Token counts come straight from Ollama's response.
+A local model costs ₹0; cloud prices are added per model when one is plugged in.
+The summary line looks like this (values from a scripted test run, not a real model):
+
+```json
+{"type":"run","model":"llama3.2:3b","outcome":"final_answer","steps":3,"prompt_tokens":810,"completion_tokens":75,"total_ms":3,"cost_inr":0,"cost_known":true}
+```
+
 ### Safety built into the loop
 
 - Four exits: final answer, max steps, context timeout, LLM error.
@@ -47,6 +59,7 @@ cmd/mcp-k8s/        standalone MCP server over stdio (works with any MCP client)
 internal/tools/     MCP tool definitions: get_pods, get_logs (canned data until Day 6)
 internal/llm/       Client interface + OllamaClient (net/http, streaming via NDJSON)
 internal/agent/     ReAct loop, prompt, reply parser, Actor interface, MCPActor
+internal/trace/     JSONL run traces + ₹ cost model per model
 pkg/config/         env-driven config with defaults
 pkg/logger/         logrus setup (text or JSON)
 docs/adr/           architecture decisions
@@ -67,7 +80,7 @@ stdin/stdout. `mcp-k8s` also works on its own with any MCP client.
 
 Config comes from env vars: `LLM_BASE_URL` (default `http://localhost:11434`),
 `LLM_MODEL` (default `llama3.2:3b`), `MCP_K8S_SERVER` (default `bin/mcp-k8s`),
-`LOG_LEVEL`, `LOG_FORMAT`.
+`TRACE_DIR` (default `traces`), `LOG_LEVEL`, `LOG_FORMAT`.
 
 ## Test
 
@@ -83,7 +96,7 @@ as a real child process over stdio.
 
 | Phase | Days | What |
 |---|---|---|
-| 0. Foundations | 1-4 | ✅ LLM client · ✅ ReAct loop · ✅ MCP tools · tracing & token accounting |
+| 0. Foundations | 1-4 | ✅ LLM client · ✅ ReAct loop · ✅ MCP tools · ✅ tracing & token accounting |
 | 1. Environment | 5-6 | minikube + slim ecommerce app · read-only cluster tools |
 | 2. Diagnosis | 7-12 | failure classes · structured report · eval harness (20 injected failures) |
 | 3. Remediation | 13-18 | write tools · guardrails (dry-run, approval, allowlist) · remediation evals |

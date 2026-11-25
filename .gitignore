@@ -9,3 +9,5 @@ vendor/
 # editor
 .idea/
 .vscode/
+# run traces
+/traces/

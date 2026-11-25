@@ -1,7 +1,9 @@
 package agent
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"strings"
@@ -9,6 +11,7 @@ import (
 
 	"github.com/sirupsen/logrus"
 	"github.com/swathikrish753/agentic-sre/internal/llm"
+	"github.com/swathikrish753/agentic-sre/internal/trace"
 	"github.com/swathikrish753/agentic-sre/pkg/logger"
 )
 
@@ -19,17 +22,18 @@ type scriptedLLM struct {
 	last    []llm.Message
 }
 
-func (s *scriptedLLM) Complete(_ context.Context, req llm.CompletionRequest) (string, error) {
+// Each reply reports fixed token counts, so tests can check the trace totals.
+func (s *scriptedLLM) Complete(_ context.Context, req llm.CompletionRequest) (llm.Response, error) {
 	s.last = req.Messages
 	if s.calls >= len(s.replies) {
-		return "", errors.New("script exhausted")
+		return llm.Response{}, errors.New("script exhausted")
 	}
 	r := s.replies[s.calls]
 	s.calls++
-	return r, nil
+	return llm.Response{Text: r, Usage: llm.Usage{PromptTokens: 100 * s.calls, CompletionTokens: 20}}, nil
 }
 
-func (s *scriptedLLM) Stream(ctx context.Context, req llm.CompletionRequest, onToken func(string)) (string, error) {
+func (s *scriptedLLM) Stream(ctx context.Context, req llm.CompletionRequest, onToken func(string)) (llm.Response, error) {
 	return s.Complete(ctx, req)
 }
 
@@ -98,5 +102,69 @@ func TestRunCancelled(t *testing.T) {
 	a := New(&scriptedLLM{}, FakeActor{}, "test", 6, quietLogger())
 	if _, err := a.Run(ctx, "task"); !errors.Is(err, context.Canceled) {
 		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+}
+
+func TestRunWritesTrace(t *testing.T) {
+	brain := &scriptedLLM{replies: []string{
+		"Thought: check pods\nAction: get_pods\nAction Input: default",
+		"Final Answer: cart cannot reach redis",
+	}}
+	var buf bytes.Buffer
+	a := New(brain, FakeActor{}, "llama3.2:3b", 6, quietLogger()).WithTracer(trace.New(&buf), "run-1")
+
+	if _, err := a.Run(context.Background(), "Why is cart down?"); err != nil {
+		t.Fatal(err)
+	}
+
+	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+	if len(lines) != 3 { // 2 steps + 1 summary
+		t.Fatalf("got %d lines:\n%s", len(lines), buf.String())
+	}
+	var step1 trace.Step
+	var sum trace.Run
+	json.Unmarshal([]byte(lines[0]), &step1)
+	json.Unmarshal([]byte(lines[2]), &sum)
+
+	if step1.Action != "get_pods" || step1.PromptTokens != 100 || !strings.Contains(step1.Observation, "CrashLoopBackOff") {
+		t.Fatalf("step 1 = %+v", step1)
+	}
+	// 100 + 200 prompt tokens, 20 + 20 completion tokens, local model so ₹0 and a known price.
+	if sum.Outcome != "final_answer" || sum.Steps != 2 || sum.PromptTokens != 300 || sum.CompletionTokens != 40 ||
+		sum.CostINR != 0 || !sum.CostKnown || sum.RunID != "run-1" {
+		t.Fatalf("summary = %+v", sum)
+	}
+}
+
+func TestRunTraceOutcomes(t *testing.T) {
+	loop := "Thought: again\nAction: get_pods\nAction Input: default"
+	tests := []struct {
+		name    string
+		replies []string
+		ctx     func() context.Context
+		want    string
+	}{
+		{"max steps", []string{loop, loop}, context.Background, "max_steps"},
+		{"llm error", nil, context.Background, "error"},
+		{"cancelled", nil, func() context.Context {
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			return ctx
+		}, "cancelled"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			a := New(&scriptedLLM{replies: tt.replies}, FakeActor{}, "llama3.2:3b", 2, quietLogger()).WithTracer(trace.New(&buf), "r")
+			if _, err := a.Run(tt.ctx(), "task"); err == nil {
+				t.Fatal("expected an error")
+			}
+			lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+			var sum trace.Run
+			json.Unmarshal([]byte(lines[len(lines)-1]), &sum)
+			if sum.Type != "run" || sum.Outcome != tt.want {
+				t.Fatalf("summary = %+v", sum)
+			}
+		})
 	}
 }

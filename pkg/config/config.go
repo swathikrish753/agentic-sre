@@ -11,9 +11,10 @@ import (
 // environment variables with sensible defaults so the project runs
 // locally with zero setup.
 type Config struct {
-	Log LogConfig
-	LLM LLMConfig
-	MCP MCPConfig
+	Log   LogConfig
+	LLM   LLMConfig
+	MCP   MCPConfig
+	Trace TraceConfig
 }
 
 // LogConfig controls structured logging behaviour.
@@ -35,6 +36,11 @@ type MCPConfig struct {
 	K8sServer string // path to the mcp-k8s binary, started as a child process
 }
 
+// TraceConfig says where run traces are written.
+type TraceConfig struct {
+	Dir string // one <run-id>.jsonl file per run
+}
+
 // Load reads config from the environment, applies defaults, and validates.
 func Load() (Config, error) {
 	cfg := Config{
@@ -50,6 +56,9 @@ func Load() (Config, error) {
 		},
 		MCP: MCPConfig{
 			K8sServer: getEnv("MCP_K8S_SERVER", "bin/mcp-k8s"),
+		},
+		Trace: TraceConfig{
+			Dir: getEnv("TRACE_DIR", "traces"),
 		},
 	}
 	if err := cfg.validate(); err != nil {
