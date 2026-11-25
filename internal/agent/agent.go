@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"time"
 
 	"github.com/swathikrish753/agentic-sre/internal/llm"
@@ -22,7 +23,7 @@ type Agent struct {
 	model    string
 	maxSteps int
 	log      logger.Logger
-	tracer   *trace.Tracer // nil means no trace file
+	diary    io.Writer // where trace lines go; nil means no diary
 	runID    string
 }
 
@@ -31,26 +32,25 @@ func New(client llm.Client, actor Actor, model string, maxSteps int, log logger.
 	return &Agent{llm: client, actor: actor, model: model, maxSteps: maxSteps, log: log}
 }
 
-// WithTracer makes Run write one JSONL line per step and a summary line at the end.
-func (a *Agent) WithTracer(t *trace.Tracer, runID string) *Agent {
-	a.tracer, a.runID = t, runID
+// WithTrace makes Run write a diary line per step and a summary line at the end.
+func (a *Agent) WithTrace(diary io.Writer, runID string) *Agent {
+	a.diary, a.runID = diary, runID
 	return a
 }
 
 // Run loops until a Final Answer, ctx is done, the LLM fails, or maxSteps is hit.
 func (a *Agent) Run(ctx context.Context, task string) (answer string, err error) {
-	sum := trace.Run{RunID: a.runID, Model: a.model, Task: task, Started: time.Now(), CostKnown: true}
-	// Whatever way Run ends, write the summary on the way out.
+	start := time.Now()
+	total := trace.Summary{RunID: a.runID, Model: a.model}
+
+	// However Run ends, write the summary line last.
 	defer func() {
-		sum.TotalMillis = time.Since(sum.Started).Milliseconds()
-		sum.Outcome = outcome(err)
-		if err != nil {
-			sum.Error = err.Error()
-		}
-		a.tracer.Run(sum)
+		total.Outcome = outcome(err)
+		total.Millis = time.Since(start).Milliseconds()
+		trace.Write(a.diary, total)
 		a.log.WithFields(map[string]any{
-			"outcome": sum.Outcome, "steps": sum.Steps, "prompt_tokens": sum.PromptTokens,
-			"completion_tokens": sum.CompletionTokens, "total_ms": sum.TotalMillis, "cost_inr": sum.CostINR,
+			"outcome": total.Outcome, "steps": total.Steps,
+			"tokens_in": total.TokensIn, "tokens_out": total.TokensOut, "cost_inr": total.CostINR,
 		}).Info("run finished")
 	}()
 
@@ -63,67 +63,58 @@ func (a *Agent) Run(ctx context.Context, task string) (answer string, err error)
 		if err := ctx.Err(); err != nil {
 			return "", err
 		}
-		sum.Steps = step
+		stepStart := time.Now()
+		line := trace.Step{Step: step}
 
 		// Think.
-		start := time.Now()
 		resp, err := a.llm.Complete(ctx, llm.CompletionRequest{Model: a.model, Messages: history})
 		if err != nil {
 			return "", fmt.Errorf("agent: step %d: %w", step, err)
 		}
-		rec := trace.Step{
-			RunID:            a.runID,
-			Step:             step,
-			PromptTokens:     resp.Usage.PromptTokens,
-			CompletionTokens: resp.Usage.CompletionTokens,
-			LLMMillis:        time.Since(start).Milliseconds(),
-		}
-		cost, known := trace.Cost(a.model, resp.Usage)
-		rec.CostINR = cost
-		sum.PromptTokens += rec.PromptTokens
-		sum.CompletionTokens += rec.CompletionTokens
-		sum.CostINR += cost
-		sum.CostKnown = sum.CostKnown && known
-
-		log := a.log.WithFields(map[string]any{
-			"step": step, "prompt_tokens": rec.PromptTokens, "completion_tokens": rec.CompletionTokens, "llm_ms": rec.LLMMillis,
-		})
 		history = append(history, llm.Message{Role: llm.RoleAssistant, Content: resp.Text})
+		line.TokensIn, line.TokensOut = resp.Usage.PromptTokens, resp.Usage.CompletionTokens
+		line.CostINR, _ = trace.Cost(a.model, line.TokensIn, line.TokensOut)
 
 		parsed, err := parseReply(resp.Text)
-		if errors.Is(err, ErrBadFormat) {
-			log.Warn("bad format, sending reminder")
-			rec.BadFormat = true
-			a.tracer.Step(rec)
+		switch {
+		case errors.Is(err, ErrBadFormat):
+			a.log.WithField("step", step).Warn("bad format, sending reminder")
 			history = append(history, llm.Message{Role: llm.RoleUser, Content: formatReminder})
-			continue
+
+		case parsed.FinalAnswer != "":
+			a.log.WithField("step", step).Info("final answer")
+			line.FinalAnswer = parsed.FinalAnswer
+			answer = parsed.FinalAnswer
+
+		default:
+			// Act.
+			observation, err := a.actor.Act(ctx, parsed.Action, parsed.ActionInput)
+			if err != nil {
+				observation = "error: " + err.Error()
+			}
+			a.log.WithFields(map[string]any{"step": step, "tool": parsed.Action, "input": parsed.ActionInput}).Info("tool call")
+			line.Action, line.Input, line.Observation = parsed.Action, parsed.ActionInput, observation
+
+			// Observe.
+			history = append(history, llm.Message{Role: llm.RoleUser, Content: "Observation: " + observation})
 		}
 
-		if parsed.FinalAnswer != "" {
-			log.Info("final answer")
-			rec.FinalAnswer = parsed.FinalAnswer
-			a.tracer.Step(rec)
-			return parsed.FinalAnswer, nil
-		}
+		// Write this step's diary line and add it to the totals.
+		line.Millis = time.Since(stepStart).Milliseconds()
+		trace.Write(a.diary, line)
+		total.Steps = step
+		total.TokensIn += line.TokensIn
+		total.TokensOut += line.TokensOut
+		total.CostINR += line.CostINR
 
-		// Act.
-		toolStart := time.Now()
-		observation, err := a.actor.Act(ctx, parsed.Action, parsed.ActionInput)
-		if err != nil {
-			observation = "error: " + err.Error()
+		if answer != "" {
+			return answer, nil
 		}
-		rec.Action, rec.ActionInput, rec.Observation = parsed.Action, parsed.ActionInput, observation
-		rec.ToolMillis = time.Since(toolStart).Milliseconds()
-		log.WithFields(map[string]any{"tool": parsed.Action, "input": parsed.ActionInput, "tool_ms": rec.ToolMillis}).Info("tool call")
-		a.tracer.Step(rec)
-
-		// Observe.
-		history = append(history, llm.Message{Role: llm.RoleUser, Content: "Observation: " + observation})
 	}
 	return "", ErrMaxSteps
 }
 
-// outcome names how a run ended, for the trace summary.
+// outcome names how a run ended, for the summary line.
 func outcome(err error) string {
 	switch {
 	case err == nil:

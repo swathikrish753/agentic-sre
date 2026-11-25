@@ -2,58 +2,35 @@ package trace
 
 import (
 	"bytes"
-	"encoding/json"
-	"strings"
 	"testing"
-
-	"github.com/swathikrish753/agentic-sre/internal/llm"
 )
 
-func TestTracerWritesJSONLines(t *testing.T) {
-	var buf bytes.Buffer
-	tr := New(&buf)
-	tr.Step(Step{RunID: "r1", Step: 1, Action: "get_pods", PromptTokens: 120, CompletionTokens: 18, LLMMillis: 900})
-	tr.Run(Run{RunID: "r1", Outcome: "final_answer", Steps: 1})
+func TestWrite(t *testing.T) {
+	var diary bytes.Buffer
+	Write(&diary, Step{Step: 1, Action: "get_pods", TokensIn: 180, TokensOut: 25})
+	Write(&diary, Summary{Outcome: "final_answer", Steps: 1})
 
-	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
-	if len(lines) != 2 {
-		t.Fatalf("got %d lines: %q", len(lines), buf.String())
+	want := `{"step":1,"action":"get_pods","tokens_in":180,"tokens_out":25,"ms":0,"cost_inr":0}` + "\n" +
+		`{"run_id":"","model":"","outcome":"final_answer","steps":1,"tokens_in":0,"tokens_out":0,"ms":0,"cost_inr":0}` + "\n"
+	if diary.String() != want {
+		t.Fatalf("got:\n%s\nwant:\n%s", diary.String(), want)
 	}
-	var step map[string]any
-	if err := json.Unmarshal([]byte(lines[0]), &step); err != nil {
-		t.Fatal(err)
-	}
-	if step["type"] != "step" || step["action"] != "get_pods" || step["prompt_tokens"] != 120.0 {
-		t.Fatalf("step line = %s", lines[0])
-	}
-	if !strings.Contains(lines[1], `"type":"run"`) || !strings.Contains(lines[1], `"outcome":"final_answer"`) {
-		t.Fatalf("run line = %s", lines[1])
-	}
-}
 
-func TestNilTracerIsANoOp(t *testing.T) {
-	var tr *Tracer
-	tr.Step(Step{Step: 1})
-	tr.Run(Run{})
-	if err := tr.Close(); err != nil {
-		t.Fatal(err)
-	}
+	Write(nil, Step{}) // no diary: must not panic
 }
 
 func TestCost(t *testing.T) {
-	u := llm.Usage{PromptTokens: 2_000_000, CompletionTokens: 500_000}
-
-	if inr, ok := Cost("llama3.2:3b", u); !ok || inr != 0 {
-		t.Fatalf("local model: %v, %v", inr, ok)
+	if inr, known := Cost("llama3.2:3b", 2_000_000, 500_000); inr != 0 || !known {
+		t.Fatalf("local model: %v %v", inr, known)
 	}
 
-	Prices["test-cloud"] = Price{InputPerMTok: 10, OutputPerMTok: 40}
-	defer delete(Prices, "test-cloud")
-	if inr, ok := Cost("test-cloud", u); !ok || inr != 40 { // 2×10 + 0.5×40
-		t.Fatalf("cloud model: %v, %v", inr, ok)
+	pricePerMillion["pretend-cloud"] = [2]float64{10, 40}
+	defer delete(pricePerMillion, "pretend-cloud")
+	if inr, _ := Cost("pretend-cloud", 2_000_000, 500_000); inr != 40 { // 2×₹10 + 0.5×₹40
+		t.Fatalf("cloud model: %v", inr)
 	}
 
-	if _, ok := Cost("unknown-model", u); ok {
-		t.Fatal("unknown model must not report a price")
+	if _, known := Cost("unknown", 1, 1); known {
+		t.Fatal("unknown model must say known=false")
 	}
 }

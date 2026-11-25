@@ -9,7 +9,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"time"
 )
 
 // OllamaClient calls a local Ollama server over plain net/http.
@@ -47,21 +46,14 @@ type ollamaResponse struct {
 	Done    bool          `json:"done"`
 	Error   string        `json:"error,omitempty"`
 
-	// Sent on the final message only. Durations are in nanoseconds.
-	PromptEvalCount int   `json:"prompt_eval_count"`
-	EvalCount       int   `json:"eval_count"`
-	TotalDuration   int64 `json:"total_duration"`
-	LoadDuration    int64 `json:"load_duration"`
+	// The bill. Ollama sends it on the final message only.
+	PromptEvalCount int `json:"prompt_eval_count"`
+	EvalCount       int `json:"eval_count"`
 }
 
-// usage turns Ollama's counters into our Usage.
+// usage reads the bill.
 func (r ollamaResponse) usage() Usage {
-	return Usage{
-		PromptTokens:     r.PromptEvalCount,
-		CompletionTokens: r.EvalCount,
-		TotalDuration:    time.Duration(r.TotalDuration),
-		LoadDuration:     time.Duration(r.LoadDuration),
-	}
+	return Usage{PromptTokens: r.PromptEvalCount, CompletionTokens: r.EvalCount}
 }
 
 // toOllamaMessages is the only place our Message type meets Ollama's JSON.

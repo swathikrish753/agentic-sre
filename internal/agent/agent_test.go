@@ -110,60 +110,58 @@ func TestRunWritesTrace(t *testing.T) {
 		"Thought: check pods\nAction: get_pods\nAction Input: default",
 		"Final Answer: cart cannot reach redis",
 	}}
-	var buf bytes.Buffer
-	a := New(brain, FakeActor{}, "llama3.2:3b", 6, quietLogger()).WithTracer(trace.New(&buf), "run-1")
+	var diary bytes.Buffer
+	a := New(brain, FakeActor{}, "llama3.2:3b", 6, quietLogger()).WithTrace(&diary, "run-1")
 
 	if _, err := a.Run(context.Background(), "Why is cart down?"); err != nil {
 		t.Fatal(err)
 	}
 
-	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+	lines := strings.Split(strings.TrimSpace(diary.String()), "\n")
 	if len(lines) != 3 { // 2 steps + 1 summary
-		t.Fatalf("got %d lines:\n%s", len(lines), buf.String())
+		t.Fatalf("got %d lines:\n%s", len(lines), diary.String())
 	}
 	var step1 trace.Step
-	var sum trace.Run
+	var total trace.Summary
 	json.Unmarshal([]byte(lines[0]), &step1)
-	json.Unmarshal([]byte(lines[2]), &sum)
+	json.Unmarshal([]byte(lines[2]), &total)
 
-	if step1.Action != "get_pods" || step1.PromptTokens != 100 || !strings.Contains(step1.Observation, "CrashLoopBackOff") {
+	if step1.Action != "get_pods" || step1.TokensIn != 100 || !strings.Contains(step1.Observation, "CrashLoopBackOff") {
 		t.Fatalf("step 1 = %+v", step1)
 	}
-	// 100 + 200 prompt tokens, 20 + 20 completion tokens, local model so ₹0 and a known price.
-	if sum.Outcome != "final_answer" || sum.Steps != 2 || sum.PromptTokens != 300 || sum.CompletionTokens != 40 ||
-		sum.CostINR != 0 || !sum.CostKnown || sum.RunID != "run-1" {
-		t.Fatalf("summary = %+v", sum)
+	// Tokens in: 100 + 200. Tokens out: 20 + 20. Local model, so ₹0.
+	if total.Outcome != "final_answer" || total.Steps != 2 || total.TokensIn != 300 || total.TokensOut != 40 || total.RunID != "run-1" {
+		t.Fatalf("summary = %+v", total)
 	}
 }
 
 func TestRunTraceOutcomes(t *testing.T) {
 	loop := "Thought: again\nAction: get_pods\nAction Input: default"
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+
 	tests := []struct {
 		name    string
 		replies []string
-		ctx     func() context.Context
+		ctx     context.Context
 		want    string
 	}{
-		{"max steps", []string{loop, loop}, context.Background, "max_steps"},
-		{"llm error", nil, context.Background, "error"},
-		{"cancelled", nil, func() context.Context {
-			ctx, cancel := context.WithCancel(context.Background())
-			cancel()
-			return ctx
-		}, "cancelled"},
+		{"max steps", []string{loop, loop}, context.Background(), "max_steps"},
+		{"llm error", nil, context.Background(), "error"},
+		{"cancelled", nil, cancelled, "cancelled"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var buf bytes.Buffer
-			a := New(&scriptedLLM{replies: tt.replies}, FakeActor{}, "llama3.2:3b", 2, quietLogger()).WithTracer(trace.New(&buf), "r")
-			if _, err := a.Run(tt.ctx(), "task"); err == nil {
+			var diary bytes.Buffer
+			a := New(&scriptedLLM{replies: tt.replies}, FakeActor{}, "llama3.2:3b", 2, quietLogger()).WithTrace(&diary, "r")
+			if _, err := a.Run(tt.ctx, "task"); err == nil {
 				t.Fatal("expected an error")
 			}
-			lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
-			var sum trace.Run
-			json.Unmarshal([]byte(lines[len(lines)-1]), &sum)
-			if sum.Type != "run" || sum.Outcome != tt.want {
-				t.Fatalf("summary = %+v", sum)
+			lines := strings.Split(strings.TrimSpace(diary.String()), "\n")
+			var total trace.Summary
+			json.Unmarshal([]byte(lines[len(lines)-1]), &total)
+			if total.Outcome != tt.want {
+				t.Fatalf("summary = %+v", total)
 			}
 		})
 	}

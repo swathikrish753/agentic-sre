@@ -2,10 +2,7 @@
 // this package knows which provider (Ollama, a cloud model, a test fake) is used.
 package llm
 
-import (
-	"context"
-	"time"
-)
+import "context"
 
 // Role says who wrote a message in the conversation.
 type Role string
@@ -29,12 +26,10 @@ type CompletionRequest struct {
 	Temperature float64
 }
 
-// Usage is what one model call cost: tokens in, tokens out, and time spent.
+// Usage is the bill for one model call.
 type Usage struct {
-	PromptTokens     int           // tokens the model read (the whole history)
-	CompletionTokens int           // tokens the model wrote
-	TotalDuration    time.Duration // server-side time for the whole call
-	LoadDuration     time.Duration // time spent loading the model into memory
+	PromptTokens     int // tokens the model read (the whole history)
+	CompletionTokens int // tokens the model wrote
 }
 
 // Response is a model's answer plus its usage.

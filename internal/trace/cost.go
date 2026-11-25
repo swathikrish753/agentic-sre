@@ -1,26 +1,14 @@
 package trace
 
-import "github.com/swathikrish753/agentic-sre/internal/llm"
-
-// Price is what a model charges, in rupees per million tokens.
-type Price struct {
-	InputPerMTok  float64
-	OutputPerMTok float64
+// pricePerMillion is ₹ per million tokens: {in, out}. Local models are free.
+// Cloud models get a row on Day 21, from the provider's published price.
+var pricePerMillion = map[string][2]float64{
+	"llama3.2:3b": {0, 0},
+	"qwen2.5:7b":  {0, 0},
 }
 
-// Prices maps a model tag to its price. Local models cost nothing.
-// Cloud models are added (from the provider's published price) when Day 21 brings one in.
-var Prices = map[string]Price{
-	"llama3.2:3b": {},
-	"qwen2.5:7b":  {},
-}
-
-// Cost returns the rupee cost of one call. ok is false when the model has no known price,
-// so a missing price never silently reads as ₹0.
-func Cost(model string, u llm.Usage) (inr float64, ok bool) {
-	p, ok := Prices[model]
-	if !ok {
-		return 0, false
-	}
-	return float64(u.PromptTokens)*p.InputPerMTok/1e6 + float64(u.CompletionTokens)*p.OutputPerMTok/1e6, true
+// Cost returns the ₹ cost of one model call. known is false when the model has no price yet.
+func Cost(model string, tokensIn, tokensOut int) (inr float64, known bool) {
+	p, known := pricePerMillion[model]
+	return (float64(tokensIn)*p[0] + float64(tokensOut)*p[1]) / 1e6, known
 }

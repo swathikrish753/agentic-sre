@@ -5,12 +5,12 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/swathikrish753/agentic-sre/internal/agent"
 	"github.com/swathikrish753/agentic-sre/internal/llm"
-	"github.com/swathikrish753/agentic-sre/internal/trace"
 	"github.com/swathikrish753/agentic-sre/pkg/config"
 	"github.com/swathikrish753/agentic-sre/pkg/logger"
 )
@@ -45,18 +45,19 @@ func main() {
 	}
 	log.WithField("tools", hands.ToolNames()).Info("connected to mcp-k8s")
 
-	// One trace file per run: traces/<run-id>.jsonl.
-	runID := trace.NewRunID(time.Now())
-	tracer, tracePath, err := trace.NewFile(cfg.Trace.Dir, runID)
+	// Open this run's diary: traces/<run-id>.jsonl.
+	runID := time.Now().Format("20060102-150405")
+	os.MkdirAll(cfg.Trace.Dir, 0o755)
+	tracePath := filepath.Join(cfg.Trace.Dir, runID+".jsonl")
+	diary, err := os.Create(tracePath)
 	if err != nil {
 		log.WithError(err).Error("open trace file")
 		os.Exit(1)
 	}
-	defer tracer.Close()
-	log = log.WithField("run_id", runID)
+	defer diary.Close()
 
 	brain := llm.NewOllamaClient(cfg.LLM.BaseURL, nil)
-	a := agent.New(brain, hands, cfg.LLM.Model, maxSteps, log).WithTracer(tracer, runID)
+	a := agent.New(brain, hands, cfg.LLM.Model, maxSteps, log).WithTrace(diary, runID)
 
 	task := "The cart service is down. Find out why."
 	if len(os.Args) > 1 {
@@ -67,7 +68,6 @@ func main() {
 	log.WithField("trace", tracePath).Info("trace written")
 	if err != nil {
 		log.WithError(err).Error("agent run failed")
-		tracer.Close() // os.Exit skips defers
 		os.Exit(1)
 	}
 	fmt.Println(answer)

@@ -34,14 +34,14 @@ Two interfaces carry the design, so the loop never changes when either side is s
 
 ### Every run is traced
 
-Each run writes `traces/<run-id>.jsonl`: one line per step (action, observation, prompt and
-completion tokens, LLM and tool latency, ₹ cost), then one summary line (outcome, steps,
+Each run writes `traces/<run-id>.jsonl`: one line per step (action, observation, tokens in
+and out, time, ₹ cost), then one summary line (outcome, steps,
 total tokens, total time, total cost). Token counts come straight from Ollama's response.
 A local model costs ₹0; cloud prices are added per model when one is plugged in.
 The summary line looks like this (values from a scripted test run, not a real model):
 
 ```json
-{"type":"run","model":"llama3.2:3b","outcome":"final_answer","steps":3,"prompt_tokens":810,"completion_tokens":75,"total_ms":3,"cost_inr":0,"cost_known":true}
+{"run_id":"20261125-142438","model":"llama3.2:3b","outcome":"final_answer","steps":3,"tokens_in":810,"tokens_out":75,"ms":3,"cost_inr":0}
 ```
 
 ### Safety built into the loop

@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"time"
 )
 
 func TestOllamaComplete(t *testing.T) {
@@ -19,7 +18,7 @@ func TestOllamaComplete(t *testing.T) {
 			t.Fatalf("unexpected request: %+v", req)
 		}
 		w.Write([]byte(`{"message":{"role":"assistant","content":"pong"},"done":true,` +
-			`"prompt_eval_count":26,"eval_count":2,"total_duration":350000000,"load_duration":10000000}`))
+			`"prompt_eval_count":26,"eval_count":2}`))
 	}))
 	defer srv.Close()
 
@@ -31,7 +30,7 @@ func TestOllamaComplete(t *testing.T) {
 	if err != nil || got.Text != "pong" {
 		t.Fatalf("got %q, %v", got.Text, err)
 	}
-	want := Usage{PromptTokens: 26, CompletionTokens: 2, TotalDuration: 350 * time.Millisecond, LoadDuration: 10 * time.Millisecond}
+	want := Usage{PromptTokens: 26, CompletionTokens: 2}
 	if got.Usage != want {
 		t.Fatalf("usage = %+v, want %+v", got.Usage, want)
 	}
